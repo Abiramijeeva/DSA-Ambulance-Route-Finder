@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <title>Ambulance Tracking · RouteCare</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body class="tracking-page">
+    <main class="tracking-shell" data-trip-id="{{ trip_id }}" data-role="driver">
+        <header class="tracking-header">
+            <a href="/dispatch" class="back-link">← Dispatch setup</a>
+            <span class="connection-state" id="connection-state">Checking secure trip access…</span>
+        </header>
+        <section class="panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="eyebrow">DRIVER DEVICE · GPS SHARING</div>
+                    <h1>Ambulance trip</h1>
+                    <p>GPS is sent only after you start tracking and allow browser location permission. Stop or complete sharing at any time.</p>
+                </div>
+            </div>
+            <div class="trip-error error-box" id="trip-error" role="alert" hidden></div>
+            <div class="trip-summary-grid" id="trip-summary"></div>
+            <div class="trip-actions">
+                <button class="primary-button" id="start-trip" type="button">Start Trip</button>
+                <button class="secondary-button" id="stop-tracking" type="button" disabled>Stop Tracking</button>
+                <button class="danger-button" id="complete-trip" type="button" disabled>Complete Trip</button>
+            </div>
+            <div class="status-banner" id="tracking-warning" role="status">Trip location is private to the trip’s dispatcher link.</div>
+            <div class="tracking-map" id="trip-map" role="img" aria-label="Live trip map"></div>
+            <p class="field-note">Location timestamps and accuracy are recorded. The database keeps only the latest accepted position plus aggregate distance and update count; exact position fields are cleared when tracking stops or the trip completes.</p>
+        </section>
+    </main>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='map-tiles.js') }}"></script>
+    <script src="{{ url_for('static', filename='trip-live.js') }}" defer></script>
+</body>
+</html>

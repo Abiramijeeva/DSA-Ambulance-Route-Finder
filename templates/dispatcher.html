@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <title>Dispatcher Dashboard · RouteCare</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body class="tracking-page">
+    <main class="tracking-shell" data-trip-id="{{ trip_id }}" data-role="dispatcher">
+        <header class="tracking-header">
+            <a href="/dispatch" class="back-link">← Dispatch setup</a>
+            <span class="connection-state" id="connection-state">Connecting to live trip…</span>
+        </header>
+        <section class="panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="eyebrow">AUTHORIZED DISPATCHER VIEW</div>
+                    <h1>Trip dashboard</h1>
+                    <p>Live GPS updates require the driver device to be online and tracking. OSRM estimates are not live traffic.</p>
+                </div>
+            </div>
+            <div class="trip-error error-box" id="trip-error" role="alert" hidden></div>
+            <div class="trip-summary-grid" id="trip-summary"></div>
+            <div class="status-banner" id="tracking-warning" role="status">Waiting for authorized trip data…</div>
+            <div class="tracking-map" id="trip-map" role="img" aria-label="Dispatcher live ambulance map"></div>
+            <section class="trip-history-panel">
+                <h2>Trip history and summary</h2>
+                <div id="trip-history-summary">Waiting for recorded trip data.</div>
+                <ol class="trip-event-list" id="trip-event-list"></ol>
+                <p class="field-note">Travel distance is straight-line between accepted GPS updates, not road distance. GPS breadcrumb tracks are not retained; this timeline records trip lifecycle events only.</p>
+            </section>
+        </section>
+    </main>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='map-tiles.js') }}"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='trip-live.js') }}" defer></script>
+</body>
+</html>

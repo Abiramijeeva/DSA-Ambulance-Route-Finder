@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <title>Live Dispatch · RouteCare</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body class="tracking-page">
+    <main class="tracking-shell">
+        <header class="tracking-header">
+            <a href="/" class="back-link">← Route planner</a>
+            <div class="live-pill"><span></span> Live trip dispatch · no live traffic</div>
+        </header>
+        <section class="panel dispatch-create">
+            <div class="panel-heading">
+                <div>
+                    <div class="eyebrow">REAL-WORLD TRIP SETUP</div>
+                    <h1>Create ambulance trip</h1>
+                    <p>Uses geocoded locations and OSRM mapped-road estimates. Live location starts only when the driver opts in.</p>
+                </div>
+            </div>
+            {% if error %}<div class="error-box" role="alert">{{ error }}</div>{% endif %}
+            {% if created_trip %}
+            <div class="success-panel" role="status">
+                <h2>Trip planned</h2>
+                <p><strong>Ambulance:</strong> {{ created_trip.ambulance_id }} ·
+                   <strong>Trip:</strong> {{ created_trip.id }} ·
+                   <strong>Priority:</strong> {{ created_trip.priority }}</p>
+                <p>OSRM estimate: {{ "%.1f"|format(created_trip.distance_km) }} km · {{ created_trip.duration_minutes }} min. This is not live traffic or an emergency-service dispatch.</p>
+                <label for="driver-link">Private driver link · share only with this ambulance</label>
+                <div class="copy-row">
+                    <input id="driver-link" type="text" readonly value="{{ created_trip.driver_url }}">
+                    <button type="button" class="secondary-button copy-link" data-copy="driver-link">Copy link</button>
+                </div>
+                <label for="dispatcher-link">Private dispatcher link · share only with authorized dispatchers</label>
+                <div class="copy-row">
+                    <input id="dispatcher-link" type="text" readonly value="{{ created_trip.viewer_url }}">
+                    <button type="button" class="secondary-button copy-link" data-copy="dispatcher-link">Copy link</button>
+                </div>
+                <p class="field-note">These unguessable links are shown once. Anyone holding a link has that link’s access; protect it. Tokens are stored as hashes, not recoverable from the database.</p>
+                <a class="primary-button link-button" href="{{ created_trip.viewer_url }}">Open dispatcher dashboard</a>
+            </div>
+            {% else %}
+            <form method="post" action="/dispatch" id="create-trip-form">
+                <div class="form-grid">
+                    <div>
+                        <label for="ambulance_id">Ambulance ID</label>
+                        <input id="ambulance_id" name="ambulance_id" type="text" maxlength="32"
+                               pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,31}" required
+                               value="{{ ambulance_id or 'AMB-01' }}">
+                    </div>
+                    <div>
+                        <label for="priority">Emergency priority</label>
+                        <select id="priority" name="priority" required>
+                            {% for level in priorities %}
+                            <option value="{{ level }}" {% if (priority or 'Medium') == level %}selected{% endif %}>{{ level }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="origin">Starting address</label>
+                        <input id="origin" name="origin" type="text" maxlength="256" required
+                               placeholder="Address, landmark, or city" value="{{ origin or '' }}">
+                    </div>
+                    <div>
+                        <label for="destination">Destination</label>
+                        <input id="destination" name="destination" type="text" maxlength="512" required
+                               placeholder="Hospital or destination" value="{{ destination or '' }}">
+                        <input id="destination_lat" name="destination_lat" type="hidden">
+                        <input id="destination_lon" name="destination_lon" type="hidden">
+                    </div>
+                </div>
+                <section class="hospital-search-box" aria-labelledby="hospital-search-title">
+                    <h2 id="hospital-search-title">Find a hospital in OpenStreetMap</h2>
+                    <div class="copy-row">
+                        <label class="visually-hidden" for="hospital-query">Hospital name or area</label>
+                        <input id="hospital-query" type="text" maxlength="120"
+                               placeholder="Hospital name or area, e.g. Kengeri Bengaluru">
+                        <button class="secondary-button" type="button" id="hospital-search-button">Search hospitals</button>
+                    </div>
+                    <p class="field-note">Search is submitted only when you press the button. Public OSM listings may be incomplete; bed availability, emergency capacity, and operating status are not provided.</p>
+                    <div id="hospital-search-status" class="refresh-status" role="status" hidden></div>
+                    <div id="hospital-search-map" class="hospital-search-map" hidden></div>
+                    <div id="hospital-results" class="hospital-results"></div>
+                </section>
+                <div class="safety-note">
+                    Location tracking requires the driver’s explicit browser permission and a secure HTTPS origin outside localhost.
+                    Use only for a controlled prototype; this is not a certified dispatch or emergency response service.
+                </div>
+                <button type="submit" class="primary-button" id="create-trip-button">Calculate OSRM route and create trip <span>→</span></button>
+            </form>
+            {% endif %}
+        </section>
+    </main>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='map-tiles.js') }}"></script>
+    <script src="{{ url_for('static', filename='dispatch.js') }}" defer></script>
+</body>
+</html>

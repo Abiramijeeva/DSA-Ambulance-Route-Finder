@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <title>Ambulance Route Finder</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar section-nav">
+            <div class="brand">
+                <div class="brand-icon">✚</div>
+                <div>
+                    <div class="brand-title">RouteCare</div>
+                    <div class="brand-subtitle">Emergency route planner</div>
+                </div>
+            </div>
+
+            <div class="side-label">WORKSPACE</div>
+            <a class="nav-item active" href="#route-planner"><span>⌁</span> Route Planner</a>
+            <a class="nav-item" href="#road-network"><span>◎</span> Road Network</a>
+            <a class="nav-item" href="/dispatch"><span>↗</span> Live Dispatch</a>
+
+            <div class="sidebar-note">
+                <div class="status-dot"></div>
+                <div>
+                    <strong>Traffic source</strong>
+                    <p>Sample-network simulation or OpenStreetMap road estimates. Neither provides live traffic.</p>
+                </div>
+            </div>
+            <div class="sidebar-footer">MTDS 131 · CIA 3 Micro Project</div>
+        </aside>
+
+        <main class="main-content">
+            <nav class="mobile-nav section-nav" aria-label="Page sections">
+                <a class="nav-item active" href="#route-planner">Route Planner</a>
+                <a class="nav-item" href="#road-network">Road Network</a>
+                <a class="nav-item" href="/dispatch">Live Dispatch</a>
+            </nav>
+            <header class="topbar">
+                <div class="home-heading">
+                    <div>
+                        <div class="eyebrow">EMERGENCY TRANSPORTATION</div>
+                        <h1>Ambulance Route Finder</h1>
+                        <p class="subtitle">Compare demo-network routes or OpenStreetMap road estimates. No live traffic is provided.</p>
+                    </div>
+                    <figure class="home-ambulance-photo">
+                        <img src="{{ url_for('static', filename='images/ambulance-india.jpg') }}"
+                             alt="Ambulance vehicle in India"
+                             width="1280" height="960" fetchpriority="high">
+                        <figcaption>
+                            <a href="https://commons.wikimedia.org/wiki/File:Ambulance_in_India.jpg"
+                               target="_blank" rel="noopener noreferrer">Photo: Oleg Yunakov · CC BY-SA 4.0</a>
+                        </figcaption>
+                    </figure>
+                </div>
+                <div class="live-pill" id="osm-source-pill" {% if routing_mode != "osm" %}hidden{% endif %}><span></span> OSM road estimate · no live traffic</div>
+                <div class="demo-pill" id="demo-source-pill" {% if routing_mode == "osm" %}hidden{% endif %}><span></span> Demo mode · simulated sample graph</div>
+            </header>
+
+            <section class="stats-grid">
+                <article class="stat-card">
+                    <div class="stat-label">LOCATIONS</div>
+                    <div class="stat-value" id="location-count">{{ "08" if routing_mode == "osm" else "06" }}</div>
+                    <div class="stat-foot" id="location-count-label">{{ "Kengeri hospital choices" if routing_mode == "osm" else "Vertices in sample graph" }}</div>
+                </article>
+                <article class="stat-card">
+                    <div class="stat-label">ROAD CONNECTIONS</div>
+                    <div class="stat-value" id="road-count">{{ "OSM" if routing_mode == "osm" else "10" }}</div>
+                    <div class="stat-foot" id="road-count-label">{{ "OSRM road network" if routing_mode == "osm" else "Undirected weighted roads" }}</div>
+                </article>
+                <article class="stat-card">
+                    <div class="stat-label">ROUTING ALGORITHM</div>
+                    <div class="stat-value algorithm-value" id="algorithm-value">{{ "OSRM + Dijkstra" if routing_mode == "osm" else "Dijkstra" }}</div>
+                    <div class="stat-foot" id="algorithm-label">{{ "OSRM route options ranked by min-heap Dijkstra" if routing_mode == "osm" else "Weighted graph + Min Heap" }}</div>
+                </article>
+                <article class="stat-card">
+                    <div class="stat-label">EMERGENCY PRIORITY</div>
+                    <div class="stat-value priority-value priority-{{ priority | lower }}">{{ priority }}</div>
+                    <div class="stat-foot">Selected for this dispatch</div>
+                </article>
+            </section>
+
+            {% if notice %}<div class="notice-box" role="status">{{ notice }}</div>{% endif %}
+            {% if error %}<div class="error-box" role="alert">{{ error }}</div>{% endif %}
+
+            <section class="content-grid">
+                <article class="panel planner-panel" id="route-planner">
+                    <div class="panel-heading">
+                        <div>
+                            <h2>Plan a route</h2>
+                            <p>Choose demo routing or an OSM road route, priority, and departure time.</p>
+                        </div>
+                        <div class="panel-icon">↗</div>
+                    </div>
+
+                    <form method="POST" action="/" class="route-form" id="route-form">
+                        <input type="hidden" name="action" value="find">
+                        <label for="routing_mode">Routing source</label>
+                        <select name="routing_mode" id="routing_mode">
+                            <option value="demo" {% if routing_mode == "demo" %}selected{% endif %}>Demo network · simulated</option>
+                            <option value="osm" {% if routing_mode == "osm" %}selected{% endif %}>OpenStreetMap + OSRM · road estimate</option>
+                        </select>
+
+                        <div id="demo-location-fields" {% if routing_mode != "demo" %}hidden{% endif %}>
+                            <label for="source">Starting location</label>
+                            <select name="source" id="source">
+                                {% for loc in locations %}
+                                <option value="{{ loc.code }}" {% if source == loc.code %}selected{% endif %}>
+                                    {{ loc.code }} — {{ loc.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+
+                            <div class="route-connector"><span></span></div>
+
+                            <label for="destination">Destination</label>
+                            <select name="destination" id="destination">
+                                {% for loc in locations %}
+                                <option value="{{ loc.code }}" {% if destination == loc.code %}selected{% endif %}>
+                                    {{ loc.code }} — {{ loc.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div id="osm-location-fields" {% if routing_mode != "osm" %}hidden{% endif %}>
+                            <label for="origin_text">Starting address</label>
+                            <input type="text" id="origin_text" name="origin_text" maxlength="256"
+                                   placeholder="Address, city, landmark, or place anywhere in the world"
+                                   value="{{ origin_text }}">
+                            <input type="hidden" name="origin_lat" id="origin_lat" value="{{ origin_lat }}">
+                            <input type="hidden" name="origin_lon" id="origin_lon" value="{{ origin_lon }}">
+                            <button type="button" class="secondary-button location-button" id="use-current-location">
+                                Use My Current Location
+                            </button>
+                            <p class="field-note" id="location-status" role="status">
+                                Use an address worldwide or allow location access in your browser.
+                            </p>
+                            <div class="route-connector"><span></span></div>
+                            <label for="destination_mode">Destination type</label>
+                            <select name="destination_mode" id="destination_mode">
+                                <option value="hospital" {% if destination_mode == "hospital" %}selected{% endif %}>Choose a listed Kengeri hospital</option>
+                                <option value="custom" {% if destination_mode == "custom" %}selected{% endif %}>Enter a custom destination worldwide</option>
+                            </select>
+                            <div id="hospital-destination-fields">
+                            <label for="hospital_id">Hospital destination</label>
+                            <select name="hospital_id" id="hospital_id">
+                                {% for hospital in hospitals %}
+                                <option value="{{ hospital.id }}" {% if hospital_id == hospital.id %}selected{% endif %}>
+                                    {{ hospital.name }} — {{ hospital.address }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            </div>
+                            <div id="custom-destination-fields">
+                                <label for="destination_text">Destination address, city, landmark, or hospital</label>
+                                <input type="text" id="destination_text" name="destination_text" maxlength="256"
+                                       placeholder="e.g. Apollo Hospital, Chennai, India"
+                                       value="{{ destination_text }}">
+                            </div>
+                            <p class="field-note">Nominatim searches are submitted manually (no autocomplete) and cached. OSRM routes any supported mapped road connection worldwide; it does not provide current traffic.</p>
+                        </div>
+
+                        <label for="priority" class="form-spaced-label">Emergency priority</label>
+                        <select name="priority" id="priority" required>
+                            {% for option in priorities %}
+                            <option value="{{ option }}" {% if priority == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+
+                        <label for="departure_time" class="form-spaced-label">Departure date and time</label>
+                        <input type="datetime-local" id="departure_time" name="departure_time"
+                               value="{{ departure_value }}" required>
+
+                        <button type="submit" class="primary-button" id="route-submit-button">Find and compare routes <span>→</span></button>
+                        <p class="refresh-status" id="route-submit-status" role="status" hidden>Calculating route options…</p>
+                    </form>
+
+                    {% if result %}
+                    <section class="result-box" aria-labelledby="route-results-title">
+                        <div class="result-heading-row">
+                            <div>
+                                <div class="result-kicker">ROUTE COMPARISON</div>
+                                <h3 id="route-results-title">Available routes</h3>
+                            </div>
+                            <span class="priority-badge priority-{{ result.priority | lower }}">{{ result.priority }} priority</span>
+                        </div>
+                        {% if result.mode == "osm" %}
+                        <p class="result-caption">OpenStreetMap / OSRM road-network estimate · alternatives compared by Dijkstra · no live traffic · departure {{ result.departure }}.</p>
+                        {% else %}
+                        <p class="result-caption">Simulated sample network · departure {{ result.departure }}.</p>
+                        {% endif %}
+
+                        {% if result.routes | length == 1 %}
+                        <p class="refresh-status" role="status">
+                            Only one distinct route is available for this journey from the current routing data.
+                        </p>
+                        {% endif %}
+
+                        <div class="route-options">
+                            {% for route in result.routes %}
+                            <article class="route-option {% if route.is_selected %}route-option-selected{% endif %}">
+                                <div class="route-option-heading">
+                                    <strong>{{ route.label }}</strong>
+                                    {% if route.is_selected %}<span class="selected-tag">Selected</span>{% endif %}
+                                </div>
+                                <div class="route-option-time">{{ route.duration }} <span>min</span></div>
+                                {% if route.mode == "osm" %}<div class="route-option-distance">{{ "%.1f"|format(route.distance_km) }} km</div>{% endif %}
+                                <div class="path-chips">
+                                    {% for code in (route.path_names if route.mode == 'osm' else route.path) %}
+                                    <span class="path-chip">{{ code }}</span>
+                                    {% if not loop.last %}<span class="path-arrow">→</span>{% endif %}
+                                    {% endfor %}
+                                </div>
+                                <div class="route-name">{{ route.path_names | join(' → ') }}</div>
+                                <div class="eta-row">
+                                    <span>Estimated arrival</span>
+                                    <strong>{{ route.arrival }}</strong>
+                                </div>
+                                {% if not route.is_selected %}
+                                <form method="POST" action="/" class="route-selection-form">
+                                    <input type="hidden" name="action" value="select_route">
+                                    <input type="hidden" name="source" value="{{ source }}">
+                                    <input type="hidden" name="destination" value="{{ destination }}">
+                                    <input type="hidden" name="routing_mode" value="{{ routing_mode }}">
+                                    <input type="hidden" name="origin_text" value="{{ origin_text }}">
+                                    <input type="hidden" name="hospital_id" value="{{ hospital_id }}">
+                                    <input type="hidden" name="destination_mode" value="{{ destination_mode }}">
+                                    <input type="hidden" name="destination_text" value="{{ destination_text }}">
+                                    <input type="hidden" name="origin_lat" value="{{ origin_lat }}">
+                                    <input type="hidden" name="origin_lon" value="{{ origin_lon }}">
+                                    <input type="hidden" name="priority" value="{{ result.priority }}">
+                                    <input type="hidden" name="departure_time" value="{{ departure_value }}">
+                                    <input type="hidden" name="route_index" value="{{ loop.index0 }}">
+                                    <button type="submit" class="secondary-button">Select this route and save</button>
+                                </form>
+                                {% endif %}
+                            </article>
+                            {% endfor %}
+                        </div>
+
+                        {% if result.mode == "osm" %}
+                        <section class="voice-panel" aria-labelledby="voice-directions-title">
+                            <h3 id="voice-directions-title">Voice directions</h3>
+                            {% if result.selected.instructions %}
+                            <ol class="voice-instructions">
+                                {% for instruction in result.selected.instructions %}
+                                <li>{{ instruction }}</li>
+                                {% endfor %}
+                            </ol>
+                            <div class="voice-actions">
+                                <button type="button" class="secondary-button" id="read-directions">Read directions aloud</button>
+                                <button type="button" class="text-button" id="stop-directions" hidden>Stop</button>
+                            </div>
+                            <p class="field-note" id="voice-status" role="status">Directions are based only on turn maneuvers returned by OSRM.</p>
+                            {% else %}
+                            <p class="field-note">OSRM did not provide turn-by-turn maneuvers for this route, so voice directions are unavailable.</p>
+                            {% endif %}
+                        </section>
+                        {% else %}
+                        <p class="field-note">Voice turn-by-turn guidance is unavailable for the simulated demo network.</p>
+                        {% endif %}
+
+                        <h3 class="road-list-title">Selected route breakdown</h3>
+                        {% for road in result.selected.roads %}
+                        <div class="road-row">
+                            <div class="road-dot"></div>
+                            <div class="road-description">
+                                {% if result.mode == "osm" %}
+                                <strong>{{ road.from_name }}</strong>
+                                <span>{{ road.to_name }}</span>
+                                {% else %}
+                                <strong>{{ road.from_name }} → {{ road.to_name }}</strong>
+                                <span>{{ road.from_code }} to {{ road.to_code }}</span>
+                                {% endif %}
+                            </div>
+                            <div class="road-time">{{ road.minutes }} min</div>
+                        </div>
+                        {% endfor %}
+                    </section>
+                    {% else %}
+                    <div class="hint-box">
+                        <strong>How it works</strong>
+                        <p>Dijkstra's min-heap search finds the fastest route; an alternate route is calculated by temporarily excluding roads from the shortest route.</p>
+                    </div>
+                    {% endif %}
+                </article>
+
+                <article class="panel map-panel" id="road-network">
+                    <div class="panel-heading">
+                        <div>
+                            <h2 id="osm-map-title" {% if routing_mode != "osm" %}hidden{% endif %}>OpenStreetMap road map</h2>
+                            <p id="osm-map-description" {% if routing_mode != "osm" %}hidden{% endif %}>OSRM driving route estimates and mapped Kengeri hospitals · not live traffic.</p>
+                            <h2 id="demo-map-title" {% if routing_mode == "osm" %}hidden{% endif %}>Sample road network · demo only</h2>
+                            <p id="demo-map-description" {% if routing_mode == "osm" %}hidden{% endif %}>Displayed road weights and manual closures apply only to the Dijkstra demo network.</p>
+                        </div>
+                        <div class="map-legend" id="osm-map-legend" {% if routing_mode != "osm" %}hidden{% endif %}><span></span> Recommended <i></i> Alternative</div>
+                        <div class="map-legend" id="demo-map-legend" {% if routing_mode == "osm" %}hidden{% endif %}><span></span> Open road <i></i> Closed</div>
+                    </div>
+                    <div id="osm-map-panel" {% if routing_mode != "osm" %}hidden{% endif %}>
+                        <div id="osm-map" class="osm-map" role="img" aria-label="OpenStreetMap with route start, destination, and driving route"></div>
+                        <div class="osm-attribution">Listed hospitals are a local Kengeri-area sample; custom destinations can be worldwide.</div>
+                    </div>
+                    <div id="demo-map-panel" {% if routing_mode == "osm" %}hidden{% endif %}>
+                        <div class="network-wrap">
+                        <svg id="network" viewBox="0 0 690 410" role="img" aria-label="Sample weighted road network">
+                            <defs>
+                                <pattern id="dots" x="0" y="0" width="22" height="22" patternUnits="userSpaceOnUse">
+                                    <circle cx="2" cy="2" r="1" fill="#dfe7e4"/>
+                                </pattern>
+                            </defs>
+                            <rect width="690" height="410" fill="url(#dots)"/>
+                            <g id="edges"></g>
+                            <g id="nodes"></g>
+                        </svg>
+                        </div>
+                        <div class="network-caption">
+                            <span><i class="legend-dot hospital"></i> Hospital</span>
+                            <span><i class="legend-dot junction"></i> Junction</span>
+                            <span><i class="legend-dot patient"></i> Patient</span>
+                        </div>
+                    </div>
+
+                    <section class="conditions-section">
+                        <div class="section-subheading">
+                            <h3>Road closure &amp; traffic simulation</h3>
+                            <p>Demo mode only. Changes are saved locally and do not change OSM/OSRM routes.</p>
+                        </div>
+                        <form method="POST" action="/">
+                            <input type="hidden" name="action" value="update_conditions">
+                            <div class="table-scroll">
+                                <table class="conditions-table">
+                                    <thead>
+                                        <tr><th>Road</th><th>Base</th><th>Close</th><th>Add minutes</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for road in roads %}
+                                        <tr>
+                                            <td>{{ road.first }} — {{ road.second }}</td>
+                                            <td>{{ road.base_minutes }} min</td>
+                                            <td class="checkbox-cell">
+                                                <input type="checkbox" id="close_{{ road.key }}" name="close_{{ road.key }}"
+                                                       {% if road.closed %}checked{% endif %}>
+                                                <label for="close_{{ road.key }}" class="visually-hidden">Close road {{ road.first }} to {{ road.second }}</label>
+                                            </td>
+                                            <td>
+                                                <input class="delay-input" type="number" min="0" max="10000" step="1"
+                                                       name="delay_{{ road.key }}" value="{{ road.added_minutes }}"
+                                                       aria-label="Additional minutes for {{ road.first }} to {{ road.second }}">
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="condition-actions">
+                                <button type="submit" class="secondary-button">Apply road conditions</button>
+                            </div>
+                        </form>
+                        <form method="POST" action="/">
+                            <input type="hidden" name="action" value="restore_conditions">
+                            <button type="submit" class="text-button">Restore original road conditions</button>
+                        </form>
+                    </section>
+
+                    <div class="complexity-note">
+                        <div class="complexity-icon">⌘</div>
+                        <div>
+                            <strong>Algorithm complexity</strong>
+                            <p>Fastest path: O((V + E) log V). Alternatives use repeated spur-path Dijkstra searches.</p>
+                        </div>
+                    </div>
+                </article>
+            </section>
+
+            <section class="panel analytics-panel">
+                <div class="panel-heading">
+                    <div>
+                        <h2>Journey analytics</h2>
+                        <p>Summary of all saved journeys in the local database.</p>
+                    </div>
+                </div>
+                <div class="analytics-grid">
+                    <article class="stat-card">
+                        <div class="stat-label">SAVED JOURNEYS</div>
+                        <div class="stat-value">{{ analytics.journey_count }}</div>
+                    </article>
+                    <article class="stat-card">
+                        <div class="stat-label">AVERAGE ESTIMATED TIME</div>
+                        <div class="stat-value">{% if analytics.average_duration is not none %}{{ analytics.average_duration }} min{% else %}—{% endif %}</div>
+                    </article>
+                    <article class="stat-card">
+                        <div class="stat-label">AVERAGE OSRM DISTANCE</div>
+                        <div class="stat-value">{% if analytics.average_distance_km is not none %}{{ "%.1f"|format(analytics.average_distance_km) }} km{% else %}—{% endif %}</div>
+                    </article>
+                </div>
+            </section>
+
+            <section class="panel history-panel">
+                <div class="panel-heading">
+                    <div>
+                        <h2>Route history</h2>
+                        <p>Most recent 30 saved route searches, retained in the local SQLite database.</p>
+                    </div>
+                </div>
+                {% if history %}
+                <div class="table-scroll">
+                    <table class="history-table">
+                        <thead>
+                            <tr><th>Searched</th><th>Start</th><th>Destination</th><th>Selected route</th><th>Distance</th><th>Estimated duration</th><th>Estimated arrival</th><th>Priority</th><th>Source</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for item in history %}
+                            <tr>
+                                <td>{{ item.searched_at }}</td>
+                                <td>{{ item.source }}</td>
+                                <td>{{ item.destination }}</td>
+                                <td>{{ item.route }}</td>
+                                <td>{% if item.distance_km is not none %}{{ "%.1f"|format(item.distance_km) }} km{% else %}Unavailable · demo network{% endif %}</td>
+                                <td>{{ item.duration }} min</td>
+                                <td>{{ item.arrival }}</td>
+                                <td><span class="priority-badge priority-{{ item.priority | lower }}">{{ item.priority }}</span></td>
+                                <td>{{ {"osm_osrm": "OSM / OSRM road estimate", "google_live": "Legacy Google record"}.get(item.data_source, "Demo simulation") }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="empty-history">No saved routes yet. Search for a route to start your history.</div>
+                {% endif %}
+            </section>
+
+            <footer>
+                <span>MTDS 131 · Advanced Data Structures and Algorithms</span>
+                <span>Prototype only · Not for real emergency dispatch</span>
+            </footer>
+        </main>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='map-tiles.js') }}"></script>
+    <script>
+        const graphData = {{ graph | tojson }};
+        const selectedPath = {{ (result.selected.path if result and result.mode == "demo" else []) | tojson }};
+        const svgNS = "http://www.w3.org/2000/svg";
+        const edgeGroup = document.getElementById("edges");
+        const nodeGroup = document.getElementById("nodes");
+        if (edgeGroup && nodeGroup) {
+            const positions = Object.fromEntries(graphData.nodes.map(node => [node.id, node]));
+
+            function svgElement(tag, attrs) {
+                const element = document.createElementNS(svgNS, tag);
+                Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, value));
+                return element;
+            }
+
+            const pathEdges = new Set();
+            for (let index = 0; index < selectedPath.length - 1; index++) {
+                pathEdges.add([selectedPath[index], selectedPath[index + 1]].sort().join("-"));
+            }
+
+            graphData.edges.forEach(edge => {
+                const from = positions[edge.from];
+                const to = positions[edge.to];
+                const isSelected = pathEdges.has([edge.from, edge.to].sort().join("-"));
+                const lineClass = edge.closed ? "road-line closed-road" :
+                    isSelected ? "road-line selected-road" : "road-line";
+                edgeGroup.appendChild(svgElement("line", {
+                    x1: from.x, y1: from.y, x2: to.x, y2: to.y, class: lineClass
+                }));
+
+                const middleX = (from.x + to.x) / 2;
+                const middleY = (from.y + to.y) / 2;
+                const label = svgElement("g", {});
+                label.appendChild(svgElement("rect", {
+                    x: middleX - 27, y: middleY - 12, width: 54, height: 24, rx: 8,
+                    class: edge.closed ? "weight-bg closed-weight-bg" :
+                        isSelected ? "weight-bg selected-weight-bg" : "weight-bg"
+                }));
+                const text = svgElement("text", {
+                    x: middleX, y: middleY + 4, "text-anchor": "middle",
+                    class: edge.closed ? "weight-text closed-weight-text" :
+                        isSelected ? "weight-text selected-weight-text" : "weight-text"
+                });
+                text.textContent = edge.closed ? "Closed" : edge.weight + "m";
+                label.appendChild(text);
+                edgeGroup.appendChild(label);
+            });
+
+            graphData.nodes.forEach(node => {
+                const isStart = selectedPath.length && node.id === selectedPath[0];
+                const isEnd = selectedPath.length && node.id === selectedPath[selectedPath.length - 1];
+                const group = svgElement("g", {});
+                group.appendChild(svgElement("circle", {
+                    cx: node.x, cy: node.y, r: 25,
+                    class: isStart ? "node-circle start-node" :
+                        isEnd ? "node-circle end-node" : "node-circle"
+                }));
+                const code = svgElement("text", {
+                    x: node.x, y: node.y + 5, "text-anchor": "middle", class: "node-code"
+                });
+                code.textContent = node.id;
+                group.appendChild(code);
+
+                const name = svgElement("text", {
+                    x: node.x, y: node.y + 43, "text-anchor": "middle", class: "node-name"
+                });
+                name.textContent = node.name;
+                group.appendChild(name);
+                nodeGroup.appendChild(group);
+            });
+        }
+
+        const osmHospitals = {{ hospitals | tojson }};
+        const osmRoutes = {{ (result.routes if result and result.mode == "osm" else []) | tojson }};
+        const modeSelect = document.getElementById("routing_mode");
+        const demoFields = document.getElementById("demo-location-fields");
+        const osmFields = document.getElementById("osm-location-fields");
+        const demoMapPanel = document.getElementById("demo-map-panel");
+        const osmMapPanel = document.getElementById("osm-map-panel");
+        const sourceSelect = document.getElementById("source");
+        const destinationSelect = document.getElementById("destination");
+        const originInput = document.getElementById("origin_text");
+        const hospitalSelect = document.getElementById("hospital_id");
+        const destinationMode = document.getElementById("destination_mode");
+        const hospitalDestinationFields = document.getElementById("hospital-destination-fields");
+        const customDestinationFields = document.getElementById("custom-destination-fields");
+        const customDestinationInput = document.getElementById("destination_text");
+        const originLatitude = document.getElementById("origin_lat");
+        const originLongitude = document.getElementById("origin_lon");
+        const locationStatus = document.getElementById("location-status");
+        const routeForm = document.getElementById("route-form");
+        const routeSubmitButton = document.getElementById("route-submit-button");
+        const routeSubmitStatus = document.getElementById("route-submit-status");
+        let osmMap = null;
+        let currentLocationMarker = null;
+
+        function popupLabel(text) {
+            const element = document.createElement("div");
+            element.textContent = text;
+            return element;
+        }
+
+        function initializeOsmMap() {
+            if (osmMap || typeof L === "undefined") {
+                return;
+            }
+            osmMap = L.map("osm-map").setView([0, 0], 2);
+
+            osmHospitals.forEach(hospital => {
+                L.circleMarker([hospital.lat, hospital.lon], {
+                    radius: 6, color: "#b44d42", fillColor: "#ef8f78", fillOpacity: 0.9
+                }).addTo(osmMap).bindPopup(popupLabel(`${hospital.name} — ${hospital.address}`));
+            });
+
+            let visibleCoordinates = [];
+            osmRoutes.forEach(route => {
+                const latLngs = route.geometry.map(([longitude, latitude]) => [latitude, longitude]);
+                const isSelected = route.is_selected;
+                const line = L.polyline(latLngs, {
+                    color: isSelected ? "#167d68" : "#457eb3",
+                    weight: isSelected ? 6 : 4,
+                    opacity: isSelected ? 0.9 : 0.7,
+                    dashArray: isSelected ? null : "8 8"
+                }).addTo(osmMap);
+                line.bindPopup(popupLabel(`${route.label}: ${route.duration} min, ${route.distance_km.toFixed(1)} km`));
+                visibleCoordinates = visibleCoordinates.concat(latLngs);
+            });
+
+            if (osmRoutes.length) {
+                const origin = osmRoutes[0].origin;
+                const destination = osmRoutes[0].destination;
+                L.marker([origin.lat, origin.lon]).addTo(osmMap)
+                    .bindPopup(popupLabel(`Start: ${origin.display_name}`));
+                L.marker([destination.lat, destination.lon]).addTo(osmMap)
+                    .bindPopup(popupLabel(`Destination: ${destination.name}`));
+                visibleCoordinates.push(
+                    [origin.lat, origin.lon],
+                    [destination.lat, destination.lon]
+                );
+                if (visibleCoordinates.length) {
+                    osmMap.fitBounds(visibleCoordinates, {padding: [24, 24]});
+                }
+            } else if (osmHospitals.length) {
+                osmMap.fitBounds(
+                    osmHospitals.map(hospital => [hospital.lat, hospital.lon]),
+                    {padding: [24, 24], maxZoom: 13}
+                );
+            }
+            window.addOpenStreetMapBaseLayer(osmMap);
+        }
+
+        function updateLocationFields() {
+            const isOsm = modeSelect.value === "osm";
+            demoFields.hidden = isOsm;
+            osmFields.hidden = !isOsm;
+            demoMapPanel.hidden = isOsm;
+            osmMapPanel.hidden = !isOsm;
+            document.getElementById("osm-source-pill").hidden = !isOsm;
+            document.getElementById("demo-source-pill").hidden = isOsm;
+            document.getElementById("osm-map-title").hidden = !isOsm;
+            document.getElementById("osm-map-description").hidden = !isOsm;
+            document.getElementById("demo-map-title").hidden = isOsm;
+            document.getElementById("demo-map-description").hidden = isOsm;
+            document.getElementById("osm-map-legend").hidden = !isOsm;
+            document.getElementById("demo-map-legend").hidden = isOsm;
+            document.getElementById("location-count").textContent = isOsm ? "08" : "06";
+            document.getElementById("location-count-label").textContent =
+                isOsm ? "Kengeri hospital choices" : "Vertices in sample graph";
+            document.getElementById("road-count").textContent = isOsm ? "OSM" : "10";
+            document.getElementById("road-count-label").textContent =
+                isOsm ? "OSRM road network" : "Undirected weighted roads";
+            document.getElementById("algorithm-value").textContent =
+                isOsm ? "OSRM + Dijkstra" : "Dijkstra";
+            document.getElementById("algorithm-label").textContent =
+                isOsm ? "OSRM route options ranked by min-heap Dijkstra" :
+                    "Weighted graph + Min Heap";
+            sourceSelect.required = !isOsm;
+            destinationSelect.required = !isOsm;
+            originInput.required = isOsm;
+            const useHospital = destinationMode.value === "hospital";
+            hospitalDestinationFields.hidden = !useHospital;
+            customDestinationFields.hidden = useHospital;
+            hospitalSelect.required = isOsm && useHospital;
+            customDestinationInput.required = isOsm && !useHospital;
+            if (isOsm) {
+                if (typeof L === "undefined") {
+                    locationStatus.textContent = "The map library could not load. Check your internet connection; address routing may still be available.";
+                } else {
+                    initializeOsmMap();
+                    if (osmMap) {
+                        window.setTimeout(() => osmMap.invalidateSize(), 0);
+                    }
+                }
+            }
+        }
+
+        modeSelect.addEventListener("change", updateLocationFields);
+        destinationMode.addEventListener("change", updateLocationFields);
+        updateLocationFields();
+
+        document.getElementById("use-current-location").addEventListener("click", () => {
+            if (!navigator.geolocation) {
+                locationStatus.textContent = "This browser does not support location detection. Enter a starting address instead.";
+                return;
+            }
+            locationStatus.textContent = "Requesting permission to access your current location…";
+            navigator.geolocation.getCurrentPosition(position => {
+                const latitude = position.coords.latitude;
+                const longitude = position.coords.longitude;
+                originLatitude.value = latitude.toFixed(6);
+                originLongitude.value = longitude.toFixed(6);
+                originInput.value = "Current location";
+                locationStatus.textContent = "Location detected. Submit the form to calculate a route.";
+                initializeOsmMap();
+                if (osmMap) {
+                    osmMap.setView([latitude, longitude], 14);
+                    if (currentLocationMarker) {
+                        currentLocationMarker.remove();
+                    }
+                    currentLocationMarker = L.marker([latitude, longitude]).addTo(osmMap)
+                        .bindPopup(popupLabel("Your current location")).openPopup();
+                }
+            }, error => {
+                const messages = {
+                    1: "Location permission was denied. Allow access in browser settings or enter an address.",
+                    2: "Your location is unavailable. Check device location services or enter an address.",
+                    3: "Location detection timed out. Try again or enter an address."
+                };
+                locationStatus.textContent = messages[error.code] || "Could not detect your location. Enter an address instead.";
+            }, {enableHighAccuracy: true, timeout: 15000, maximumAge: 60000});
+        });
+
+        originInput.addEventListener("input", () => {
+            originLatitude.value = "";
+            originLongitude.value = "";
+        });
+
+        routeForm.addEventListener("submit", () => {
+            routeSubmitButton.disabled = true;
+            routeSubmitButton.textContent = "Calculating routes…";
+            routeSubmitStatus.hidden = false;
+        });
+
+        document.querySelectorAll(".route-selection-form").forEach(form => {
+            form.addEventListener("submit", () => {
+                const button = form.querySelector("button[type='submit']");
+                button.disabled = true;
+                button.textContent = "Refreshing and saving…";
+            });
+        });
+
+        const readDirectionsButton = document.getElementById("read-directions");
+        const stopDirectionsButton = document.getElementById("stop-directions");
+        const voiceStatus = document.getElementById("voice-status");
+        const voiceInstructions = {{ (result.selected.instructions if result and result.mode == "osm" else []) | tojson }};
+        if (readDirectionsButton && stopDirectionsButton && voiceStatus) {
+            readDirectionsButton.addEventListener("click", () => {
+                if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {
+                    voiceStatus.textContent = "This browser does not support spoken directions.";
+                    return;
+                }
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(
+                    `Turn-by-turn directions. ${voiceInstructions.join(". ")}`
+                );
+                utterance.onstart = () => {
+                    voiceStatus.textContent = "Reading the OSRM-provided route maneuvers aloud.";
+                    readDirectionsButton.disabled = true;
+                    stopDirectionsButton.hidden = false;
+                };
+                utterance.onend = () => {
+                    voiceStatus.textContent = "Finished reading the available route maneuvers.";
+                    readDirectionsButton.disabled = false;
+                    stopDirectionsButton.hidden = true;
+                };
+                utterance.onerror = () => {
+                    voiceStatus.textContent = "Spoken directions could not be played.";
+                    readDirectionsButton.disabled = false;
+                    stopDirectionsButton.hidden = true;
+                };
+                window.speechSynthesis.speak(utterance);
+            });
+            stopDirectionsButton.addEventListener("click", () => {
+                window.speechSynthesis.cancel();
+                voiceStatus.textContent = "Voice directions stopped.";
+                readDirectionsButton.disabled = false;
+                stopDirectionsButton.hidden = true;
+            });
+        }
+
+        document.querySelectorAll(".section-nav a.nav-item[href^='#']").forEach(link => {
+            link.addEventListener("click", event => {
+                const target = document.querySelector(link.hash);
+                if (!target) {
+                    return;
+                }
+                event.preventDefault();
+                target.scrollIntoView({behavior: "smooth", block: "start"});
+                window.history.replaceState(null, "", link.hash);
+                document.querySelectorAll(".section-nav a.nav-item").forEach(item => {
+                    item.classList.toggle("active", item === link);
+                });
+            });
+        });
+    </script>
+</body>
+</html>
